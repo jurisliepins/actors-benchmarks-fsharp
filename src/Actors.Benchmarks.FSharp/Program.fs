@@ -87,7 +87,7 @@ module Sequential =
 [<MemoryDiagnoser>]
 type SequentialBenchmarks() =
     
-    [<Params(1, 10, 100, 1_000, 10_000, 100_000, 1_000_000)>]
+    [<Params(1, 10, 100, 1_000, 10_000, 100_000)>]
     member val Count = 0 with get, set
     
     [<Benchmark>]
