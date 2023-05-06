@@ -387,7 +387,7 @@ type SequentialBenchmarks() =
 [<MemoryDiagnoser>]
 type ParallelBenchmarks() =
     
-    [<Params(1, 10, 1000, 10_000, 100_000, 1_000_000)>]
+    [<Params(1, 10, 1000, 10_000, 100_000)>]
     member val MessageCount = 0 with get, set
     
     [<Benchmark>]
