@@ -9,7 +9,7 @@ Single parent actor creates a single child actor and sends it a `ping` message. 
 parent -ping-> child 1 -ping-> ... -ping-> child N
        <-pong-         <-pong-     <-pong-
 ```
-This scenario is optimised of heavy actor creation rather than heavy message passing. 
+This scenario is optimised of heavy actor creation rather than a large volume of messages. 
 
 There are 2 types of message benchmarks for each actor framework:
 * Obj where messages are regular reference types.
