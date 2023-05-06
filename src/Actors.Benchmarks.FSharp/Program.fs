@@ -55,7 +55,41 @@ module Sequential =
         parentRef.Post(Ping)
         event.WaitOne() |> ignore
         ()
-    
+
+    let mailboxProcessorStruct (actorCount: int) =
+        let event = new ManualResetEvent(false);
+        let rec childBody idx parentRef (mailbox: MailboxProcessor<MessageStruct>) =
+            let rec receive () = async {
+                match! mailbox.Receive() with
+                | PingStruct -> return! handlePing ()
+                | PongStruct -> handlePong () }
+            and handlePing () =
+                if idx < actorCount then
+                    let childRef = MailboxProcessor.Start(childBody (idx + 1) mailbox)
+                    childRef.Post(PingStruct)
+                else
+                    mailbox.Post(PongStruct)
+                receive ()
+            and handlePong () =
+                parentRef.Post(PongStruct)
+            receive ()
+        let rec parentBody (mailbox: MailboxProcessor<MessageStruct>) =
+            let rec receive () = async {
+                match! mailbox.Receive() with
+                | PingStruct -> return! handlePing ()
+                | PongStruct -> handlePong () }
+            and handlePing () =
+                let childRef = MailboxProcessor.Start(childBody 1 mailbox)
+                childRef.Post(PingStruct)
+                receive ()
+            and handlePong () =
+                event.Set() |> ignore
+            receive ()
+        let parentRef = MailboxProcessor.Start(parentBody)
+        parentRef.Post(PingStruct)
+        event.WaitOne() |> ignore
+        ()
+
     let akkaObj (actorCount: int) =
         let event = new ManualResetEvent(false)
         let system = AkkaSystem.create "akka-system" (AkkaConfig.defaultConfig ())
@@ -95,42 +129,8 @@ module Sequential =
         let parentRef = spawn system "parent" (parentBody)
         parentRef <! Ping
         event.WaitOne() |> ignore
-        () 
-    
-    let mailboxProcessorStruct (actorCount: int) =
-        let event = new ManualResetEvent(false);
-        let rec childBody idx parentRef (mailbox: MailboxProcessor<MessageStruct>) =
-            let rec receive () = async {
-                match! mailbox.Receive() with
-                | PingStruct -> return! handlePing ()
-                | PongStruct -> handlePong () }
-            and handlePing () =
-                if idx < actorCount then
-                    let childRef = MailboxProcessor.Start(childBody (idx + 1) mailbox)
-                    childRef.Post(PingStruct)
-                else
-                    mailbox.Post(PongStruct)
-                receive ()
-            and handlePong () =
-                parentRef.Post(PongStruct)
-            receive ()
-        let rec parentBody (mailbox: MailboxProcessor<MessageStruct>) =
-            let rec receive () = async {
-                match! mailbox.Receive() with
-                | PingStruct -> return! handlePing ()
-                | PongStruct -> handlePong () }
-            and handlePing () =
-                let childRef = MailboxProcessor.Start(childBody 1 mailbox)
-                childRef.Post(PingStruct)
-                receive ()
-            and handlePong () =
-                event.Set() |> ignore
-            receive ()
-        let parentRef = MailboxProcessor.Start(parentBody)
-        parentRef.Post(PingStruct)
-        event.WaitOne() |> ignore
         ()
-        
+            
     let akkaStruct (actorCount: int) =
         let event = new ManualResetEvent(false)
         let system = AkkaSystem.create "akka-system" (AkkaConfig.defaultConfig ())
@@ -250,8 +250,8 @@ module Parallel =
                 match! mailbox.Receive() with
                 | StartStruct -> return! handleStart ()
                 | StopStruct -> handleStop ()
-                | PingStruct idx -> return! handlePong () idx
-                | PongStruct idx -> return! handlePong () idx }
+                | PingStruct idx -> handlePing idx
+                | PongStruct idx -> return! handlePong idx }
             and handleStart () =
                 let childRef = MailboxProcessor.Start(childBody mailbox)
                 for message in 0..messageCount - 1 do
@@ -259,7 +259,9 @@ module Parallel =
                 receive ()
             and handleStop () =
                 event.Set() |> ignore
-            and handlePong () (idx: int) =
+            and handlePing (idx: int) =
+                ()
+            and handlePong (idx: int) =
                 if idx >= messageCount - 1 then
                     mailbox.Post(StopStruct)                            
                 receive ()
@@ -270,28 +272,117 @@ module Parallel =
         ()
     
     let akkaObj (messageCount: int) =
+        let event = new ManualResetEvent(false)
+        let system = AkkaSystem.create "akka-system" (AkkaConfig.defaultConfig ())
+        let rec childBody (mailbox: Actor<obj>) =
+            let rec receive () = actor {
+                match! mailbox.Receive() with
+                | :? Ping as ping -> return! handlePing ping
+                | :? Stop as stop -> handleStop stop
+                | message -> unhandled message }
+            and handlePing (Ping idx: Ping) =
+                mailbox.Context.Parent <! (Pong idx)
+                if idx >= (messageCount - 1) then
+                    mailbox.Context.Self <! Stop
+                receive ()
+            and handleStop (stop: Stop) =
+                ()
+            and unhandled message =
+                printfn $"Child unhandled message %A{message}"
+            receive ()
+        let rec parentBody (mailbox: Actor<obj>) =
+            let rec receive () = actor {
+                match! mailbox.Receive() with
+                | :? Start as start -> return! handleStart start
+                | :? Stop as stop -> handleStop stop
+                | :? Pong as pong -> return! handlePong pong
+                | message -> unhandled message }
+            and handleStart (start: Start) =
+                let childRef = spawn mailbox "child" childBody
+                for message in 0..messageCount - 1 do
+                    childRef <! (Ping message)
+                receive ()
+            and handleStop (stop: Stop) =
+                event.Set() |> ignore
+            and handlePong (Pong idx: Pong) =
+                if idx >= messageCount - 1 then
+                    mailbox.Context.Self <! Stop    
+                    receive ()
+                else
+                    receive ()
+            and unhandled message =
+                printfn $"Parent unhandled message %A{message}"
+            receive ()
+        let parentRef = spawn system "parent" parentBody
+        parentRef <! Start
+        event.WaitOne() |> ignore
         ()
     
     let akkaStruct (messageCount: int) =
+        let event = new ManualResetEvent(false)
+        let system = AkkaSystem.create "akka-system" (AkkaConfig.defaultConfig ())
+        let rec childBody (mailbox: Actor<MessageStruct>) =
+            let rec receive () = actor {
+                match! mailbox.Receive() with
+                | StartStruct -> return! handleStart ()
+                | StopStruct -> handleStop ()
+                | PingStruct idx -> return! handlePing idx
+                | PongStruct idx -> handlePong idx }
+            and handleStart () =
+                receive ()
+            and handleStop () =
+                ()
+            and handlePing (idx: int) =
+                mailbox.Context.Parent <! (PongStruct idx)
+                if idx >= (messageCount - 1) then
+                    mailbox.Context.Self <! StopStruct
+                receive ()
+            and handlePong (idx: int) =
+                ()
+            receive ()
+        let rec parentBody (mailbox: Actor<MessageStruct>) =
+            let rec receive () = actor {
+                match! mailbox.Receive() with
+                | StartStruct -> return! handleStart ()
+                | StopStruct -> handleStop ()
+                | PingStruct idx -> handlePing idx
+                | PongStruct idx -> return! handlePong idx }
+            and handleStart () =
+                let childRef = spawn mailbox "child" childBody
+                for message in 0..messageCount - 1 do
+                    childRef <! (PingStruct message)
+                receive ()
+            and handleStop () =
+                event.Set() |> ignore
+            and handlePing (idx: int) =
+                ()
+            and handlePong (idx: int) =
+                if idx >= messageCount - 1 then
+                    mailbox.Context.Self <! StopStruct                            
+                receive ()
+            receive ()
+        let parentRef = spawn system "parent" parentBody
+        parentRef <! StartStruct
+        event.WaitOne() |> ignore
         ()
 
 [<MemoryDiagnoser>]
 type SequentialBenchmarks() =
     
     [<Params(1, 10)>]
-    member val Count = 0 with get, set
+    member val ActorCount = 0 with get, set
     
     [<Benchmark>]
-    member __.MailboxProcessorObj() = Sequential.mailboxProcessorObj __.Count
+    member __.MailboxProcessorObj() = Sequential.mailboxProcessorObj __.ActorCount
     
     [<Benchmark>]
-    member __.MailboxProcessorStruct() = Sequential.mailboxProcessorStruct __.Count
+    member __.MailboxProcessorStruct() = Sequential.mailboxProcessorStruct __.ActorCount
     
     [<Benchmark>]
-    member __.AkkaObj() = Sequential.akkaObj __.Count
+    member __.AkkaObj() = Sequential.akkaObj __.ActorCount
     
     [<Benchmark>]
-    member __.AkkaStruct() = Sequential.akkaStruct __.Count
+    member __.AkkaStruct() = Sequential.akkaStruct __.ActorCount
     
 [<MemoryDiagnoser>]
 type ParallelBenchmarks() =
@@ -304,6 +395,12 @@ type ParallelBenchmarks() =
     
     [<Benchmark>]
     member __.MailboxProcessorStruct() = Parallel.mailboxProcessorStruct __.MessageCount
+    
+    [<Benchmark>]
+    member __.AkkaObj() = Parallel.akkaObj __.MessageCount
+    
+    [<Benchmark>]
+    member __.AkkaStruct() = Parallel.akkaStruct __.MessageCount
     
 module Program =
     [<EntryPoint>]
